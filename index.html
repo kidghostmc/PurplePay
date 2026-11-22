@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>BluePay</title>
+<title>PurplePay</title>
 <style>
 :root{color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);
 --bg:#000;--panel:#0f0e14;--panel2:#1a1824;--line:rgba(255,255,255,.08);--tx:#f5f5f7;--mut:#8e8aa3;--p:#8b4dff;--p2:#b794ff;--ok:#30d18a;--err:#ff6b8a;
@@ -214,7 +214,7 @@ body.in #login{display:none}
 </head>
 <body>
 <div id="login"><div class="lbox">
-<div class="lb">BluePay</div>
+<div class="lb">PurplePay</div>
 <h2 class="lt">Entrar</h2><p class="ls" id="ls">Acesso completo à operação.</p>
 <div class="seg full" id="lrole" role="group" aria-label="Tipo de acesso"><button data-r="mod" class="on">Moderador</button><button data-r="at">Atendimento</button></div>
 <label for="lu">Usuário</label><input id="lu" autocomplete="username" placeholder="Seu usuário">
@@ -223,7 +223,7 @@ body.in #login{display:none}
 <button class="btn glow" id="lgo">Entrar</button>
 </div></div>
 <div class="shell"><header class="top">
-<div class="logo">BluePay</div>
+<div class="logo">PurplePay</div>
 <nav>
 <a href="#dashboard" data-v="dashboard">Início</a>
 <a href="#gerar-pix" data-v="gerar-pix">Gerar Pix</a>
@@ -273,7 +273,7 @@ body.in #login{display:none}
 <label for="fPct">Porcentagem de comissão (%)</label><input id="fPct" type="number" min="0.1" max="100" step="0.1" placeholder="Ex.: 10">
 <label for="fTel">Telefone (WhatsApp)</label><input id="fTel" type="tel" inputmode="numeric" placeholder="(47) 99999-9999">
 <label for="fUser">Usuário de acesso</label><input id="fUser" autocomplete="off" autocapitalize="none" placeholder="Ex.: maria">
-<label for="fPass">Senha de acesso</label><input id="fPass" autocomplete="off" placeholder="Defina uma senha">
+<label for="fPass">Senha de acesso (mínimo 12 caracteres)</label><input id="fPass" type="password" autocomplete="new-password" placeholder="Deixe em branco para manter ao editar">
 <p class="err" id="fErr"></p>
 <div class="row"><button class="btn sm" id="salvar">Salvar atendente</button><button class="btn sm ghost" id="cancelar">Cancelar</button></div>
 </div>
@@ -288,7 +288,6 @@ body.in #login{display:none}
 <div class="set"><div><b>Aviso no navegador</b><p>Funciona mesmo com a aba em segundo plano. O navegador pede permissão.</p></div>
 <label class="sw"><input type="checkbox" id="swPush" aria-label="Aviso no navegador"><span></span></label></div>
 <div class="set modonly"><div><b>Meta de faturamento mensal</b><p>Usada no medidor da tela inicial.</p></div><input id="meta" type="number" min="1" step="1" style="width:130px" aria-label="Meta mensal em reais"></div>
-<div class="set modonly"><div><b>Dados do sistema</b><p>Comece zerado ou carregue vendas de exemplo para ver os gráficos funcionando.</p></div><div class="row"><button class="btn sm ghost" id="exemplo">Carregar exemplo</button><button class="btn sm ghost" id="zerar">Zerar tudo</button></div></div>
 <div class="set"><div><b>Testar aviso</b><p>Veja como o aviso de venda aparece.</p></div>
 <button class="btn sm ghost" id="testar">Enviar teste</button></div>
 </div>
@@ -304,14 +303,30 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 const dia=864e5,t0=Date.now();
-let ats=store.get("bp2_ats",[]);
-let vendas=store.get("bp2_vendas",[]);
-const mkDuca=id=>({id,nome:"Duca",pct:10,tel:"",user:"duca",senha:"123"});
-if(!store.get("bp2_duca",false)){if(!ats.some(a=>a.user==="duca"))ats.push(mkDuca(ats.reduce((m,a)=>Math.max(m,a.id),0)+1));store.set("bp2_ats",ats);store.set("bp2_duca",true)}
-let cfg=store.get("bp_cfg",{notif:true,push:false});
-let sess=store.get("bp2_sess",null);if(sess&&sess.role==="at"&&!ats.some(a=>a.id===sess.aid))sess=null;
-let sel=null,selAt=store.get("bp2_selAt",null),atual=null,editId=null,tt;
-const salvarTudo=()=>{store.set("bp2_ats",ats);store.set("bp2_vendas",vendas)};
+let ats=[],vendas=[],pendentes=[];
+let cfg=store.get("pp_preferences",{notif:true,push:false});
+let sess=null;
+let sel=null,selAt=null,atual=null,editId=null,tt;
+let pollTimer,requestDraft,refreshing=false;
+async function api(action,body,params={}){
+ const query=new URLSearchParams({action,...params});
+ const r=await fetch('/api/app?'+query,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',
+  headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
+ const data=await r.json().catch(()=>({error:'Resposta inválida do servidor.'}));
+ if(!r.ok){const e=new Error(data.error||'Não foi possível concluir a operação.');e.status=r.status;throw e}return data;
+}
+async function sincronizar(){
+ const d=await api('state');sess=d.session;ats=d.attendants;vendas=d.sales;pendentes=d.pending;cfg.meta=d.meta;
+ if(sess.role==='at')selAt=sess.aid;
+ if(selAt&&!ats.some(a=>a.id===selAt&&a.active))selAt=sess.role==='at'?sess.aid:null;
+ $('#meta').value=d.meta;tela();return d;
+}
+function pararConsulta(){clearTimeout(pollTimer);clearInterval(cdT)}
+function mostrarPendentes(){
+ if(atual)return;
+ $('#saida').innerHTML=pendentes.length?'<h2>Cobranças em aberto</h2>'+pendentes.map(o=>`<div class="set"><div><b>${brl(o.amount)}</b><p>${o.status==='creating'?'Aguardando geração':'Aguardando pagamento'}</p></div><button class="btn sm ghost" data-open="${o.id}">Consultar</button></div>`).join(''):'<div class="empty">O QR Code e o código Pix aparecem aqui.</div>';
+ $('#saida').querySelectorAll('[data-open]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const o=await api('status',null,{id:b.dataset.open});await exibirCobranca(o)}catch(e){toast(e.message);b.disabled=false}});
+}
 const nomeAt=id=>(ats.find(a=>a.id===id)||{nome:"Sem atendente"}).nome;
 const com=v=>v.aid?v.valor*v.pct/100:0;
 const fmtTel=d=>{d=d.replace(/\D/g,"").slice(0,11);return d.length>6?`(${d.slice(0,2)}) ${d.slice(2,d.length>10?7:6)}-${d.slice(d.length>10?7:6)}`:d.length>2?`(${d.slice(0,2)}) ${d.slice(2)}`:d}
@@ -319,7 +334,7 @@ const fmtTel=d=>{d=d.replace(/\D/g,"").slice(0,11);return d.length>6?`(${d.slice
 function toast(m){const e=$("#toast");e.textContent=m;e.classList.add("show");clearTimeout(tt);tt=setTimeout(()=>e.classList.remove("show"),4500)}
 function avisar(msg){
  if(!cfg.notif)return;toast(msg);
- if(cfg.push&&"Notification" in window&&Notification.permission==="granted"){try{new Notification("BluePay",{body:msg})}catch(e){}}
+ if(cfg.push&&"Notification" in window&&Notification.permission==="granted"){try{new Notification("PurplePay",{body:msg})}catch(e){}}
 }
 
 let per=14,fAt=0,cdT;
@@ -386,103 +401,106 @@ function render(){
  $("#gauge").innerHTML=`<svg viewBox="0 0 200 116" role="img" aria-label="Meta do mês" data-tip="${mine?"Sua participação|"+brl(totM)+" de "+brl(meta)+" no mês":"Meta do mês|"+brl(totM)+" de "+brl(meta)+" · "+(meta>totM?"faltam "+brl(meta-totM):"meta batida")}">${Array.from({length:n},(_,i)=>`<rect class="${i<fl?"f":""}" style="--i:${i}" x="-5" y="-92" width="10" height="32" rx="5" transform="translate(100 104) rotate(${-90+i*180/(n-1)})" fill="${i<fl?"#a98bff":"#25232e"}"/>`).join("")}<text x="100" y="98" text-anchor="middle" font-size="30" font-weight="600" fill="#fff">${Math.round(pc*100)}%</text></svg><p class="k" style="margin:4px 0 0">${brl(totM)} de ${brl(meta)}</p>`;
  // últimas vendas
  const rec=[...VV].sort((a,b)=>b.t-a.t).slice(0,6);
- $("#lista").innerHTML=rec.length?`<table><tr><th>Data</th><th>Atendente</th><th>Valor</th><th>Status</th></tr>${rec.map(v=>`<tr><td>${new Date(v.t).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</td><td>${esc(nomeAt(v.aid))}</td><td>${brl(v.valor)}</td><td><span class="tag">Pago</span></td></tr>`).join("")}</table>`:'<div class="empty">Nenhuma venda ainda.<br><a href="#gerar-pix">Gerar um Pix</a> ou <a href="#configuracoes">carregar dados de exemplo</a>.</div>';
+ $("#lista").innerHTML=rec.length?`<table><tr><th>Data</th><th>Atendente</th><th>Valor</th><th>Status</th></tr>${rec.map(v=>`<tr><td>${new Date(v.t).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</td><td>${esc(nomeAt(v.aid))}</td><td>${brl(v.valor)}</td><td><span class="tag">Pago</span></td></tr>`).join("")}</table>`:'<div class="empty">Nenhuma venda confirmada ainda.<br><a href="#gerar-pix">Gerar um Pix</a>.</div>';
  renderAts();renderAtChips();
 }
 function renderAts(){
- $("#atLista").innerHTML=ats.length?ats.map(a=>{const l=vendas.filter(v=>v.aid===a.id);return`<div class="att"><div class="av">${esc(a.nome[0].toUpperCase())}</div>
+ $("#atLista").innerHTML=ats.some(a=>a.active)?ats.filter(a=>a.active).map(a=>{const l=vendas.filter(v=>v.aid===a.id);return`<div class="att"><div class="av">${esc(a.nome[0].toUpperCase())}</div>
  <div class="info"><b>${esc(a.nome)}</b><span class="k">${a.tel?fmtTel(a.tel)+" · ":""}${a.user?"usuário: "+esc(a.user):"sem acesso"}</span></div><span class="pct">${a.pct}%</span>
  <div class="num"><span class="k">${l.length} vendas</span><b>${brl(l.reduce((x,v)=>x+com(v),0))}</b></div>
- <div class="row"><button class="btn sm ghost" data-ed="${a.id}">Editar</button><button class="btn sm ghost" data-rm="${a.id}">Remover</button></div></div>`}).join(""):'<div class="empty">Nenhum atendente ainda. Clique em “Cadastrar novo atendente”.</div>';
+ <div class="row"><button class="btn sm ghost" data-ed="${a.id}">Editar</button><button class="btn sm ghost" data-rm="${a.id}">Desativar</button></div></div>`}).join(""):'<div class="empty">Nenhum atendente ainda. Clique em “Cadastrar novo atendente”.</div>';
 }
 function renderAtChips(){
- const h=ats.map(a=>`<button class="chip${selAt===a.id?" on":""}" data-at="${a.id}">${esc(a.nome.split(" ")[0])}<small>${a.pct}%</small></button>`).join("");
+ const h=ats.filter(a=>a.active).map(a=>`<button class="chip${selAt===a.id?" on":""}" data-at="${a.id}">${esc(a.nome.split(" ")[0])}<small>${a.pct}%</small></button>`).join("");
  $("#atChips").innerHTML=h+`<button class="chip${selAt===null?" on":""}" data-at="0">Nenhum<small>sem comissão</small></button>`;
 }
-$("#atChips").onclick=e=>{const b=e.target.closest("[data-at]");if(!b)return;selAt=+b.dataset.at||null;store.set("bp2_selAt",selAt);renderAtChips()};
+$("#atChips").onclick=e=>{const b=e.target.closest("[data-at]");if(!b)return;selAt=+b.dataset.at||null;renderAtChips()};
 
 function abrirForm(a){editId=a?a.id:null;$("#formTitulo").textContent=a?"Editar atendente":"Novo atendente";
- $("#fNome").value=a?a.nome:"";$("#fPct").value=a?a.pct:"";$("#fTel").value=a?fmtTel(a.tel):"";$("#fUser").value=a&&a.user?a.user:"";$("#fPass").value=a&&a.senha?a.senha:"";$("#fErr").textContent="";
+ $("#fNome").value=a?a.nome:"";$("#fPct").value=a?a.pct:"";$("#fTel").value=a?fmtTel(a.tel):"";$("#fUser").value=a&&a.user?a.user:"";$("#fPass").value="";$("#fErr").textContent="";
  $("#formCard").style.display="block";$("#fNome").focus()}
 $("#novo").onclick=()=>abrirForm();
 $("#cancelar").onclick=()=>$("#formCard").style.display="none";
 $("#fTel").oninput=e=>e.target.value=fmtTel(e.target.value);
-$("#salvar").onclick=()=>{
- const nome=$("#fNome").value.trim(),pct=parseFloat($("#fPct").value),tel=$("#fTel").value.replace(/\D/g,""),user=$("#fUser").value.trim().toLowerCase(),senha=$("#fPass").value;
- if(nome.length<2)return $("#fErr").textContent="Digite o nome do atendente.";
- if(!(pct>0&&pct<=100))return $("#fErr").textContent="Informe uma porcentagem entre 0,1 e 100.";
- if(tel.length<10)return $("#fErr").textContent="Digite o telefone com DDD.";
- if(!/^[a-z0-9._-]{3,}$/.test(user))return $("#fErr").textContent="Usuário: mínimo 3 caracteres, sem espaços ou acentos.";
- if(user==="admin"||ats.some(a=>a.user===user&&a.id!==editId))return $("#fErr").textContent="Esse usuário já está em uso.";
- if(senha.length<3)return $("#fErr").textContent="A senha precisa ter pelo menos 3 caracteres.";
- if(editId){Object.assign(ats.find(a=>a.id===editId),{nome,pct,tel,user,senha})}else{const id=Date.now();ats.push({id,nome,pct,tel,user,senha});if(!selAt)selAt=id}
- salvarTudo();store.set("bp2_selAt",selAt);$("#formCard").style.display="none";render();toast(editId?"Atendente atualizado":"Atendente cadastrado");
+$("#salvar").onclick=async()=>{
+ const b=$('#salvar');b.disabled=true;$('#fErr').textContent='';
+ try{await api('attendant',{id:editId,nome:$('#fNome').value,pct:Number($('#fPct').value),tel:$('#fTel').value,user:$('#fUser').value,password:$('#fPass').value});
+  $('#fPass').value='';$('#formCard').style.display='none';await sincronizar();toast('Atendente salvo.');
+ }catch(e){$('#fErr').textContent=e.message}finally{b.disabled=false}
 };
-$("#atLista").onclick=e=>{
- const ed=e.target.closest("[data-ed]"),rm=e.target.closest("[data-rm]");
+$("#atLista").onclick=async e=>{
+ const ed=e.target.closest('[data-ed]'),rm=e.target.closest('[data-rm]');
  if(ed)abrirForm(ats.find(a=>a.id===+ed.dataset.ed));
- if(rm){if(rm.dataset.sure){const id=+rm.dataset.rm;ats=ats.filter(a=>a.id!==id);if(selAt===id)selAt=null;salvarTudo();render();toast("Atendente removido")}else{rm.dataset.sure=1;rm.textContent="Confirmar remoção";setTimeout(()=>{rm.dataset.sure="";rm.textContent="Remover"},3500)}}
+ if(rm){if(rm.dataset.sure){rm.disabled=true;try{await api('attendant',{id:+rm.dataset.rm,disable:true});await sincronizar();toast('Atendente desativado. Histórico preservado.')}catch(e){toast(e.message);rm.disabled=false}}
+ else{rm.dataset.sure=1;rm.textContent='Confirmar desativação';setTimeout(()=>{rm.dataset.sure='';rm.textContent='Desativar'},3500)}}
 };
 
 [10,15,20,25,30,35].forEach(v=>{const b=document.createElement("button");b.className="chip";b.textContent="R$ "+v;b.onclick=()=>{sel=v;$("#custom").value="";marcar()};$("#chips").appendChild(b)});
 function marcar(){[...$("#chips").children].forEach(c=>c.classList.toggle("on",sel!=null&&c.textContent==="R$ "+sel))}
 $("#custom").oninput=()=>{sel=null;marcar()};
 
-function qrSvg(seed){
- const n=25;let h=0;for(const c of seed)h=(h*31+c.charCodeAt(0))>>>0;
- const r=()=>(h=(h*1664525+1013904223)>>>0)/4294967296;
- const fp=[[0,0],[n-7,0],[0,n-7]];let s="";
- for(let y=0;y<n;y++)for(let x=0;x<n;x++){
-  const q=fp.find(([a,b])=>x>=a&&x<a+7&&y>=b&&y<b+7);let on;
-  if(q){const dx=x-q[0],dy=y-q[1];on=dx==0||dx==6||dy==0||dy==6||(dx>=2&&dx<=4&&dy>=2&&dy<=4)}
-  else if(fp.some(([a,b])=>x>=a-1&&x<=a+7&&y>=b-1&&y<=b+7))on=false;else on=r()>.5;
-  if(on)s+=`<rect x="${x}" y="${y}" width="1" height="1"/>`}
- return `<svg viewBox="0 0 ${n} ${n}" fill="#000" shape-rendering="crispEdges" role="img" aria-label="QR Code Pix">${s}</svg>`;
+function novaCobranca(){pararConsulta();atual=null;requestDraft=null;$('#gerar').disabled=false;$('#gerar').textContent='Gerar Pix';mostrarPendentes()}
+function imagemQr(value){
+ if(typeof value!=='string')return '';
+ if(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value))return value;
+ if(/^[A-Za-z0-9+/=\r\n]+$/.test(value)&&value.length>100)return 'data:image/png;base64,'+value;
+ return '';
 }
-const rid=n=>{const c="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";return Array.from({length:n},()=>c[Math.floor(Math.random()*c.length)]).join("")};
-
-$("#gerar").onclick=()=>{
- const valor=sel??parseFloat($("#custom").value);
- if(!valor||valor<=0)return $("#aviso").textContent="Escolha um valor ou digite um valor maior que zero.";
- $("#aviso").textContent="";
- const at=ats.find(a=>a.id===selAt)||null,v=valor.toFixed(2),txid=rid(25);
- const code=`00020126580014BR.GOV.BCB.PIX0136${rid(8).toLowerCase()}-demo-${rid(4).toLowerCase()}52040000530398654${String(v.length).padStart(2,"0")}${v}5802BR5908BLUEPAY6009SAO PAULO62${txid.length+4}05${txid.length}${txid}6304${rid(4)}`;
- atual={valor,aid:at?at.id:null,pct:at?at.pct:0};
- $("#saida").innerHTML=`<div class="k">Pix de <b style="color:var(--tx)">${brl(valor)}</b> · ${at?esc(at.nome)+" ganha "+brl(valor*at.pct/100):"sem atendente"}</div>
- <div class="qr">${qrSvg(code)}</div><div class="wait"><i></i>Aguardando pagamento · expira em <b id="cd">10:00</b></div>
- <div class="k">Pix copia e cola</div><div class="code" id="codigo">${code}</div>
- <div class="row"><button class="btn" id="copiar" style="flex:1">Copiar código</button></div>
- <div class="row" style="margin-top:10px"><button class="btn sm ghost" id="pagar">Simular pagamento</button></div>
- <p class="k" style="margin:12px 0 0;font-size:13px">Modo demonstração: o código e o QR são de exemplo. Para cobrar de verdade, conecte um banco ou PSP.</p>`;
- $("#copiar").onclick=async()=>{try{await navigator.clipboard.writeText(code);toast("Código Pix copiado");$("#copiar").textContent="Copiado";setTimeout(()=>{const c=$("#copiar");if(c)c.textContent="Copiar código"},1800)}catch(e){const g=document.createRange();g.selectNodeContents($("#codigo"));const s=getSelection();s.removeAllRanges();s.addRange(g);toast("Selecione e copie o código")}};
- clearInterval(cdT);let sec=600;cdT=setInterval(()=>{const e=$("#cd");if(!e){clearInterval(cdT);return}sec--;e.textContent=String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0");if(sec<=0){clearInterval(cdT);e.parentNode.classList.add("exp");e.parentNode.textContent="Pix expirado. Gere um novo.";const q=$("#pagar");if(q)q.disabled=true}},1000);
- $("#pagar").onclick=()=>{clearInterval(cdT);
-  const venda={id:Date.now(),valor:atual.valor,t:Date.now(),aid:atual.aid,pct:atual.pct};vendas.push(venda);salvarTudo();render();
-  const c=com(venda),a=ats.find(x=>x.id===venda.aid);
-  avisar("Venda de "+brl(venda.valor)+(a?" · "+a.nome+" ganhou "+brl(c):""));
-  const txt=a?encodeURIComponent(`Olá ${a.nome.split(" ")[0]}! Venda de ${brl(venda.valor)} confirmada. Sua comissão: ${brl(c)}.`):"";
-  $("#saida").innerHTML=`<div class="ok"><h2>Pix pago!</h2><p class="k">${brl(venda.valor)} entrou no seu faturamento.</p>${a?`<p>${esc(a.nome)} ganhou <b style="color:var(--ok)">${brl(c)}</b> (${a.pct}%)</p><a class="btn ghost modonly" ${a.tel?"":'style="display:none"'} target="_blank" rel="noopener" href="https://wa.me/55${a.tel}?text=${txt}">Avisar ${esc(a.nome.split(" ")[0])} no WhatsApp</a>`:""}
-  <button class="btn" id="outro" style="margin-top:12px">Gerar outro Pix</button></div>`;
-  $("#outro").onclick=()=>{$("#saida").innerHTML='<div class="empty">O QR Code e o código Pix aparecem aqui.</div>';sel=null;marcar()};
- };
+async function exibirCobranca(o){
+ pararConsulta();atual=o;
+ if(o.status==='paid'){
+  await sincronizar();
+  const a=ats.find(a=>a.id===o.aid),c=o.amount*o.pct/100;
+  $('#saida').innerHTML=`<div class="ok"><h2>Pagamento confirmado</h2><p>${brl(o.amount)} confirmado pela NexusPag.</p>${a?`<p>Comissão de ${esc(a.nome)}: <b>${brl(c)}</b></p>`:''}<p class="k">O recebimento fica na carteira da empresa na NexusPag. A comissão é apenas registrada no painel.</p><button class="btn" id="outro">Gerar outro Pix</button></div>`;
+  $('#outro').onclick=novaCobranca;avisar('Pagamento de '+brl(o.amount)+' confirmado pela NexusPag.');return;
+ }
+ if(o.status==='expired'||o.status==='cancelled'){
+  $('#saida').innerHTML=`<h2>${o.status==='expired'?'Cobrança expirada':'Cobrança cancelada'}</h2><p class="k">Nenhum pagamento confirmado para esta cobrança.</p><button class="btn" id="outro">Gerar outro Pix</button>`;$('#outro').onclick=novaCobranca;return;
+ }
+ const img=imagemQr(o.qrImage);
+ $('#saida').innerHTML=`<div class="k">Pix de <b>${brl(o.amount)}</b></div>${img?`<div class="qr"><img src="${img}" alt="QR Code Pix gerado pela NexusPag" style="width:100%;display:block"></div>`:''}
+ <div class="wait"><i></i><span id="pixStatus">${o.status==='creating'?'Consultando geração da cobrança':'Aguardando pagamento'}</span></div>
+ ${o.pixCode?`<div class="k">Pix copia e cola</div><div class="code" id="codigo">${esc(o.pixCode)}</div><button class="btn" id="copiar">Copiar código</button>`:'<p class="k">A geração ainda não foi confirmada. Repetir usa o mesmo pedido e evita duplicação.</p><button class="btn" id="repetir">Repetir geração</button>'}
+ <p class="k" id="expira"></p><p class="k" id="consultaErr" role="status"></p><button class="btn ghost sm" id="consultar">Verificar pagamento</button><button class="btn ghost sm" id="outro" style="margin-left:8px">Nova cobrança</button>`;
+ if($('#copiar'))$('#copiar').onclick=async()=>{try{await navigator.clipboard.writeText(o.pixCode);toast('Código Pix copiado')}catch{toast('Selecione o código Pix e copie.')}};
+ if($('#repetir'))$('#repetir').onclick=async()=>{const b=$('#repetir');b.disabled=true;try{const updated=await api('pix',{requestId:o.id,amountCents:Math.round(o.amount*100),aid:o.aid});await exibirCobranca(updated)}catch(e){toast(e.message);b.disabled=false}};
+ $('#outro').onclick=novaCobranca;
+ $('#consultar').onclick=()=>consultarAtual(o.id);
+ const atualizarTempo=()=>{const el=$('#expira');if(!el)return;const seconds=Math.max(0,Math.floor((Date.parse(o.expiresAt)-Date.now())/1000));el.textContent=o.expiresAt?(seconds?'Expira em '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0'):'Prazo encerrado. Consultando confirmação na NexusPag.'):'A confirmação pode levar alguns instantes.'};
+ atualizarTempo();cdT=setInterval(atualizarTempo,1000);pollTimer=setTimeout(()=>consultarAtual(o.id),10000);
+}
+async function consultarAtual(id){
+ if(atual?.id!==id)return;clearTimeout(pollTimer);
+ const b=$('#consultar');if(b)b.disabled=true;
+ try{const o=await api('status',null,{id});if(atual?.id!==id)return;
+  if(o.status!==atual.status||o.pixCode!==atual.pixCode){await exibirCobranca(o);return}
+  if($('#consultaErr'))$('#consultaErr').textContent='';
+ }catch(e){if(e.status===401){pararConsulta();sess=null;tela();lerr(e.message);return}if($('#consultaErr'))$('#consultaErr').textContent=e.message}
+ finally{if(b&&b.isConnected)b.disabled=false}
+ if(atual?.id===id&&!['paid','expired','cancelled'].includes(atual.status))pollTimer=setTimeout(()=>consultarAtual(id),10000);
+}
+$("#gerar").onclick=async()=>{
+ const valor=sel??Number($('#custom').value),amountCents=Math.round(valor*100),b=$('#gerar');
+ if(!Number.isFinite(valor)||valor<1||Math.abs(valor*100-amountCents)>0.00001)return $('#aviso').textContent='Informe um valor a partir de R$ 1,00 com até duas casas decimais.';
+ const signature=amountCents+':'+selAt;
+ if(!requestDraft||requestDraft.signature!==signature)requestDraft={signature,requestId:crypto.randomUUID(),amountCents,aid:selAt};
+ b.disabled=true;b.textContent='Gerando…';$('#aviso').textContent='';
+ try{const o=await api('pix',requestDraft);await exibirCobranca(o);requestDraft=null;await sincronizar();b.textContent='Gerar outro Pix'}
+ catch(e){$('#aviso').textContent=e.message;b.textContent='Tentar novamente'}finally{b.disabled=false}
 };
 
-$("#swNotif").checked=cfg.notif;$("#swPush").checked=cfg.push;$("#meta").value=cfg.meta||1000;$("#meta").onchange=e=>{cfg.meta=Math.max(1,parseFloat(e.target.value)||1000);store.set("bp_cfg",cfg);render();toast("Meta atualizada")};
-$("#swNotif").onchange=e=>{cfg.notif=e.target.checked;store.set("bp_cfg",cfg);toast(cfg.notif?"Avisos de venda ativados":"Avisos de venda desativados")};
+$("#swNotif").checked=cfg.notif;$("#swPush").checked=cfg.push;$("#meta").value=cfg.meta||1000;$('#meta').onchange=async e=>{try{await api('settings',{meta:Number(e.target.value)});await sincronizar();toast('Meta atualizada')}catch(error){e.target.value=cfg.meta;toast(error.message)}};
+$("#swNotif").onchange=e=>{cfg.notif=e.target.checked;store.set("pp_preferences",{notif:cfg.notif,push:cfg.push});toast(cfg.notif?"Avisos de venda ativados":"Avisos de venda desativados")};
 $("#swPush").onchange=async e=>{
- if(!e.target.checked){cfg.push=false;store.set("bp_cfg",cfg);return}
+ if(!e.target.checked){cfg.push=false;store.set("pp_preferences",{notif:cfg.notif,push:cfg.push});return}
  let ok=false;try{if("Notification" in window)ok=(await Notification.requestPermission())==="granted"}catch(x){}
- cfg.push=ok;e.target.checked=ok;store.set("bp_cfg",cfg);
+ cfg.push=ok;e.target.checked=ok;store.set("pp_preferences",{notif:cfg.notif,push:cfg.push});
  toast(ok?"Aviso no navegador ativado":"Permissão negada. Libere nas configurações do navegador.");
 };
-$("#testar").onclick=()=>{const o=cfg.notif;cfg.notif=true;avisar("Venda de "+brl(25)+" · Maria ganhou "+brl(2.5));cfg.notif=o};
+$("#testar").onclick=()=>{const o=cfg.notif;cfg.notif=true;avisar("Este é um teste de aviso. Nenhuma venda foi registrada.");cfg.notif=o};
 
 $("#seg").onclick=e=>{const b=e.target.closest("[data-d]");if(!b)return;per=+b.dataset.d;document.querySelectorAll("#seg button").forEach(x=>x.classList.toggle("on",x===b));render()};
 $("#fAt").onchange=e=>{fAt=+e.target.value;render()};
-$("#exemplo").onclick=()=>{if(!ats.length)ats.push({id:1,nome:"Maria Silva",pct:10,tel:"47991112222",user:"maria",senha:"123"},{id:2,nome:"João Souza",pct:15,tel:"47988883333",user:"joao",senha:"123"});
- const vals=[10,15,20,25,30,35];for(let i=0;i<45;i++){const a=ats[Math.floor(Math.random()*ats.length)],t=Date.now()-Math.random()*30*dia;vendas.push({id:t+i,valor:vals[Math.floor(Math.random()*6)],t,aid:a.id,pct:a.pct})}
- salvarTudo();render();toast("Dados de exemplo carregados. Veja o início.")};
-let zt;$("#zerar").onclick=e=>{const b=e.target;if(b.dataset.sure){ats=[mkDuca(1)];vendas=[];selAt=null;store.set("bp2_selAt",null);salvarTudo();render();b.dataset.sure="";b.textContent="Zerar tudo";toast("Sistema zerado")}else{b.dataset.sure=1;b.textContent="Confirmar zerar";clearTimeout(zt);zt=setTimeout(()=>{b.dataset.sure="";b.textContent="Zerar tudo"},3500)}};
 document.querySelectorAll(".bento>.card").forEach((c,i)=>c.style.animationDelay=i*50+"ms");
 
 let lrole="mod";
@@ -491,15 +509,14 @@ function tela(){
  document.body.classList.toggle("in",on);document.body.classList.toggle("r-at",at);
  if(on){const a=at&&ats.find(x=>x.id===sess.aid),nm=at?(a?a.nome:"Atendente"):"Administrador";
   $("#wn").textContent=nm;$("#wr").textContent=at?"Atendimento":"Moderador";$("#wi").textContent=nm[0].toUpperCase();
-  selAt=at?sess.aid:store.get("bp2_selAt",null);$("#h1d").textContent=at?"Meu painel":"Visão geral"}
+  selAt=at?sess.aid:selAt;$("#h1d").textContent=at?"Meu painel":"Visão geral"}
  rota();render();
 }
 function lerr(m){$("#lerr").textContent=m;if(m){const b=document.querySelector(".lbox");b.classList.remove("shake");void b.offsetWidth;b.classList.add("shake")}}
-function entrar(){
- const u=$("#lu").value.trim(),p=$("#lp").value;
- if(lrole==="at"){const a=ats.find(x=>x.user&&x.user===u.toLowerCase()&&x.senha===p);if(!a)return lerr("Usuário ou senha incorretos.");sess={role:"at",aid:a.id}}
- else{if(u!=="admin"||p!=="123")return lerr("Usuário ou senha incorretos.");sess={role:"mod"}};
- store.set("bp2_sess",sess);lerr("");$("#lp").value="";location.hash="#dashboard";tela();
+async function entrar(){
+ const b=$('#lgo');b.disabled=true;lerr('');
+ try{await api('login',{user:$('#lu').value,password:$('#lp').value,role:lrole});$('#lp').value='';location.hash='#dashboard';await sincronizar();mostrarPendentes()}
+ catch(e){lerr(e.message)}finally{b.disabled=false}
 }
 $("#lgo").onclick=entrar;
 ["lu","lp"].forEach(id=>$("#"+id).addEventListener("keydown",e=>{if(e.key==="Enter")entrar()}));
@@ -507,12 +524,16 @@ $("#lsh").onclick=()=>{const p=$("#lp"),h=p.type==="password";p.type=h?"text":"p
 $("#lrole").onclick=e=>{const b=e.target.closest("[data-r]");if(!b)return;lrole=b.dataset.r;
  document.querySelectorAll("#lrole button").forEach(x=>x.classList.toggle("on",x===b));
  $("#ls").textContent=lrole==="at"?"Use o usuário e a senha criados pelo moderador.":"Acesso completo à operação.";lerr("")};
-$("#sair").onclick=()=>{sess=null;store.set("bp2_sess",null);clearInterval(cdT);$("#saida").innerHTML='<div class="empty">O QR Code e o código Pix aparecem aqui.</div>';sel=null;marcar();$("#lu").value="";$("#lp").value="";lerr("");location.hash="";tela()};
+$('#sair').onclick=async()=>{try{await api('logout',{});pararConsulta();sess=null;ats=[];vendas=[];pendentes=[];atual=null;requestDraft=null;sel=null;selAt=null;$('#lu').value='';$('#lp').value='';$('#saida').textContent='';location.hash='';tela()}catch(e){toast(e.message)}};
+
 
 function rota(){const h=(location.hash||"#dashboard").slice(1);let ok=["dashboard","gerar-pix","atendentes","configuracoes"].includes(h)?h:"dashboard";if(sess&&sess.role==="at"&&ok==="atendentes")ok="dashboard";
  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on",v.id==="v-"+ok));
  document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on",a.dataset.v===ok))}
 addEventListener("hashchange",rota);tela();
+(async()=>{try{await sincronizar();mostrarPendentes()}catch(e){if(e.status!==401)lerr(e.message)}})();
+setInterval(async()=>{if(!sess||refreshing||document.hidden)return;refreshing=true;try{await sincronizar();mostrarPendentes()}catch(e){if(e.status===401){pararConsulta();sess=null;tela();lerr(e.message)}}finally{refreshing=false}},30000);
+
 </script>
 </body>
 </html>
